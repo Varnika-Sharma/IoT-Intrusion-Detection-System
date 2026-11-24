@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block topbar_title %}System Logs{% endblock %}
+{% block breadcrumb %}Logs{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1 class="page-title">Network Event Logs</h1>
+    <p class="page-sub">Full audit trail of all IDS-detected and system-generated events.</p>
+  </div>
+</section>
+
+<!-- Search & Filter Bar -->
+<div class="search-bar-panel">
+  <div class="search-input-wrap">
+    <span class="search-icon">⌕</span>
+    <input
+      type="text"
+      id="search-input"
+      class="search-input"
+      placeholder="Search device, IP, event type, or description…"
+      oninput="debouncedSearch()"
+    />
+  </div>
+  <select class="filter-select" id="level-filter" onchange="loadLogs()">
+    <option value="">All Levels</option>
+    <option value="INFO">INFO</option>
+    <option value="WARNING">WARNING</option>
+    <option value="DANGER">DANGER</option>
+  </select>
+  <button class="btn-secondary" onclick="clearSearch()">✕ Clear</button>
+</div>
+
+<!-- Log count -->
+<div class="log-count-bar" id="log-count-bar">Loading…</div>
+
+<!-- Logs Table -->
+<div class="panel">
+  <div class="table-wrapper">
+    <table class="data-table log-table" id="logs-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Level</th>
+          <th>Event Type</th>
+          <th>Device</th>
+          <th>Source IP</th>
+          <th>Destination</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="logs-tbody">
+        <tr><td colspan="7" class="loading-row">Loading logs…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let searchTimer = null;
+
+function debouncedSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadLogs, 300);
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('level-filter').value = '';
+  loadLogs();
+}
+
+async function loadLogs() {
+  const q     = document.getElementById('search-input').value.trim();
+  const level = document.getElementById('level-filter').value;
+
+  const params = new URLSearchParams();
+  if (q)     params.append('q', q);
+  if (level) params.append('level', level);
+
+  const url = '/api/logs' + (params.toString() ? '?' + params.toString() : '');
+  const logs = await apiFetch(url) || [];
+
+  document.getElementById('log-count-bar').textContent = `Showing ${logs.length} log entr${logs.length === 1 ? 'y' : 'ies'}`;
+  renderLogs(logs);
+}
+
+function renderLogs(logs) {
+  const tbody = document.getElementById('logs-tbody');
+  if (logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No logs match your search.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = logs.map(l => `
+    <tr class="log-table-row level-row-${l.log_level.toLowerCase()}">
+      <td class="td-mono td-time">${escHtml(l.timestamp)}</td>
+      <td><span class="level-badge level-${l.log_level.toLowerCase()}">${l.log_level}</span></td>
+      <td class="td-event">${escHtml(l.event_type)}</td>
+      <td>${escHtml(l.device_name || '—')}</td>
+      <td class="td-mono">${escHtml(l.source_ip || '—')}</td>
+      <td>${escHtml(l.destination || '—')}</td>
+      <td class="td-desc">${escHtml(l.details)}</td>
+    </tr>
+  `).join('');
+}
+
+// Auto-refresh every 10 seconds (simulated live)
+setInterval(loadLogs, 10000);
+
+loadLogs();
+</script>
+{% endblock %}

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Devices{% endblock %}
+{% block topbar_title %}Device Monitoring{% endblock %}
+{% block breadcrumb %}Devices{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1 class="page-title">IoT Device Monitor</h1>
+    <p class="page-sub">Real-time status of all registered IoT endpoints on the network.</p>
+  </div>
+  <div class="page-actions">
+    <select class="filter-select" id="status-filter" onchange="filterDevices()">
+      <option value="">All Devices</option>
+      <option value="safe">Safe</option>
+      <option value="suspicious">Suspicious</option>
+      <option value="offline">Offline</option>
+    </select>
+    <select class="filter-select" id="type-filter" onchange="filterDevices()">
+      <option value="">All Types</option>
+      <option value="Camera">Camera</option>
+      <option value="Sensor">Sensor</option>
+      <option value="HVAC">HVAC</option>
+      <option value="Security">Security</option>
+      <option value="Energy">Energy</option>
+      <option value="Network">Network</option>
+      <option value="Unknown">Unknown</option>
+    </select>
+  </div>
+</section>
+
+<!-- Summary strip -->
+<section class="device-summary-strip" id="device-summary">
+  <div class="dsstrip-item"><span id="ds-total">—</span><span>Total</span></div>
+  <div class="dsstrip-item safe"><span id="ds-safe">—</span><span>Safe</span></div>
+  <div class="dsstrip-item suspicious"><span id="ds-suspicious">—</span><span>Suspicious</span></div>
+  <div class="dsstrip-item offline"><span id="ds-offline">—</span><span>Offline</span></div>
+</section>
+
+<!-- Device Grid -->
+<section class="device-grid" id="device-grid">
+  <div class="loading-row">Loading devices…</div>
+</section>
+
+<!-- Device Detail Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">Device Detail</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allDevices = [];
+
+async function loadDevices() {
+  allDevices = await apiFetch('/api/devices') || [];
+  renderDevices(allDevices);
+  updateSummary(allDevices);
+}
+
+function updateSummary(devs) {
+  setInnerText('ds-total',      devs.length);
+  setInnerText('ds-safe',       devs.filter(d => d.status === 'safe').length);
+  setInnerText('ds-suspicious', devs.filter(d => d.status === 'suspicious').length);
+  setInnerText('ds-offline',    devs.filter(d => d.status === 'offline').length);
+}
+
+function filterDevices() {
+  const status = document.getElementById('status-filter').value;
+  const type   = document.getElementById('type-filter').value;
+  const filtered = allDevices.filter(d =>
+    (!status || d.status === status) &&
+    (!type   || d.device_type === type)
+  );
+  renderDevices(filtered);
+}
+
+function renderDevices(devs) {
+  const grid = document.getElementById('device-grid');
+  if (devs.length === 0) {
+    grid.innerHTML = '<div class="empty-state">No devices match this filter.</div>';
+    return;
+  }
+
+  const typeIcons = {
+    Camera: '📷', Sensor: '📡', HVAC: '🌡', Security: '🔒',
+    Energy: '⚡', Network: '🔗', Unknown: '❓'
+  };
+
+  grid.innerHTML = devs.map(d => `
+    <div class="device-card status-${d.status}" onclick="showDeviceModal(${d.id})">
+      <div class="device-card-header">
+        <span class="device-type-icon">${typeIcons[d.device_type] || '◉'}</span>
+        <span class="device-status-badge status-${d.status}">${d.status.toUpperCase()}</span>
+      </div>
+      <div class="device-name">${escHtml(d.name)}</div>
+      <div class="device-ip">${escHtml(d.ip_address)}</div>
+      <div class="device-meta">
+        <span class="dmeta-tag">${escHtml(d.device_type)}</span>
+        <span class="dmeta-seen">Last: ${d.last_seen ? d.last_seen.substring(11,16) : 'N/A'}</span>
+      </div>
+      <div class="device-mac">${escHtml(d.mac_address || '—')}</div>
+    </div>
+  `).join('');
+}
+
+async function showDeviceModal(id) {
+  const d = await apiFetch(`/api/devices/${id}`);
+  if (!d) return;
+
+  const statusColor = { safe: '#22c55e', suspicious: '#ef4444', offline: '#6b7280' };
+  document.getElementById('modal-title').textContent = d.name;
+  document.getElementById('modal-body').innerHTML = `
+    <div class="modal-status" style="color:${statusColor[d.status] || '#fff'}">
+      ● ${d.status.toUpperCase()}
+    </div>
+    <table class="detail-table">
+      <tr><td>IP Address</td><td><code>${escHtml(d.ip_address)}</code></td></tr>
+      <tr><td>MAC Address</td><td><code>${escHtml(d.mac_address || '—')}</code></td></tr>
+      <tr><td>Device Type</td><td>${escHtml(d.device_type)}</td></tr>
+      <tr><td>Status</td><td>${d.status}</td></tr>
+      <tr><td>Last Seen</td><td>${escHtml(d.last_seen || '—')}</td></tr>
+      <tr><td>Registered</td><td>${escHtml(d.created_at || '—')}</td></tr>
+    </table>
+    ${d.status === 'suspicious' ? `<div class="modal-warn">⚠ This device has triggered intrusion detection rules. Review alerts for details.</div>` : ''}
+  `;
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+}
+
+loadDevices();
+</script>
+{% endblock %}

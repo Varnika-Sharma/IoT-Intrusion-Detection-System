@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block topbar_title %}Security Reports{% endblock %}
+{% block breadcrumb %}Reports{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <h1 class="page-title">Security Analytics Report</h1>
+    <p class="page-sub">Aggregated insights from the IDS Detection Engine and network activity logs.</p>
+  </div>
+</section>
+
+<!-- KPI Strip -->
+<section class="cards-grid kpi-grid" id="kpi-strip">
+  <div class="stat-card"><div class="card-icon icon-blue">◉</div><div class="card-body"><div class="card-value" id="rpt-total-alerts">—</div><div class="card-label">Total Alerts</div></div></div>
+  <div class="stat-card"><div class="card-icon icon-green">✓</div><div class="card-body"><div class="card-value" id="rpt-safe">—</div><div class="card-label">Safe Devices</div></div></div>
+  <div class="stat-card"><div class="card-icon icon-red">⚠</div><div class="card-body"><div class="card-value" id="rpt-suspicious">—</div><div class="card-label">Suspicious Devices</div></div></div>
+  <div class="stat-card"><div class="card-icon icon-yellow">⬡</div><div class="card-body"><div class="card-value" id="rpt-critical">—</div><div class="card-label">Critical Alerts</div></div></div>
+</section>
+
+<!-- Charts Row 1 -->
+<section class="charts-row">
+  <div class="panel chart-panel">
+    <div class="panel-header"><span class="panel-title">Alerts Over Last 7 Days</span></div>
+    <div class="panel-body"><canvas id="dailyChart" height="220"></canvas></div>
+  </div>
+  <div class="panel chart-panel">
+    <div class="panel-header"><span class="panel-title">Alert Severity Breakdown</span></div>
+    <div class="panel-body"><canvas id="severityChart" height="220"></canvas></div>
+  </div>
+</section>
+
+<!-- Charts Row 2 -->
+<section class="charts-row">
+  <div class="panel chart-panel">
+    <div class="panel-header"><span class="panel-title">Device Status Distribution</span></div>
+    <div class="panel-body"><canvas id="deviceStatusChart" height="220"></canvas></div>
+  </div>
+  <div class="panel chart-panel">
+    <div class="panel-header"><span class="panel-title">Alert Types Frequency</span></div>
+    <div class="panel-body"><canvas id="alertTypeChart" height="220"></canvas></div>
+  </div>
+</section>
+
+<!-- Log Level Distribution -->
+<section class="charts-row">
+  <div class="panel chart-panel chart-panel-wide">
+    <div class="panel-header"><span class="panel-title">Log Level Distribution</span></div>
+    <div class="panel-body"><canvas id="logLevelChart" height="160"></canvas></div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* Chart defaults for dark theme */
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = 'rgba(148,163,184,0.1)';
+
+const PALETTE = {
+  blue:   '#3b82f6',
+  green:  '#22c55e',
+  red:    '#ef4444',
+  yellow: '#f59e0b',
+  purple: '#a855f7',
+  cyan:   '#06b6d4',
+  gray:   '#6b7280',
+};
+
+async function loadReports() {
+  const d = await apiFetch('/api/reports/summary');
+  if (!d) return;
+
+  /* KPI strip */
+  const totalAlerts = Object.values(d.severity_breakdown).reduce((a,b)=>a+b,0);
+  setInnerText('rpt-total-alerts', totalAlerts);
+  setInnerText('rpt-safe',         d.device_status.safe);
+  setInnerText('rpt-suspicious',   d.device_status.suspicious);
+  setInnerText('rpt-critical',     d.severity_breakdown.critical);
+
+  /* Chart 1 – Daily alerts line chart */
+  new Chart(document.getElementById('dailyChart').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels:   d.daily_alerts.map(x => x.date.substring(5)),
+      datasets: [{
+        label: 'Alerts',
+        data:  d.daily_alerts.map(x => x.count),
+        borderColor: PALETTE.red,
+        backgroundColor: 'rgba(239,68,68,0.15)',
+        tension: 0.4,
+        fill: true,
+        pointBackgroundColor: PALETTE.red,
+        pointRadius: 5,
+      }]
+    },
+    options: {
+      plugins: { legend: { labels: { color: '#94a3b8' } } },
+      scales: {
+        x: { grid: { color: 'rgba(148,163,184,0.08)' } },
+        y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(148,163,184,0.08)' } },
+      }
+    }
+  });
+
+  /* Chart 2 – Severity doughnut */
+  const sev = d.severity_breakdown;
+  new Chart(document.getElementById('severityChart').getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Critical','High','Medium','Low'],
+      datasets: [{
+        data: [sev.critical, sev.high, sev.medium, sev.low],
+        backgroundColor: [PALETTE.red, PALETTE.yellow, PALETTE.blue, PALETTE.green],
+        borderColor: '#0f172a', borderWidth: 3,
+      }]
+    },
+    options: {
+      cutout: '65%',
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', padding: 16 } } }
+    }
+  });
+
+  /* Chart 3 – Device status pie */
+  const ds = d.device_status;
+  new Chart(document.getElementById('deviceStatusChart').getContext('2d'), {
+    type: 'pie',
+    data: {
+      labels: ['Safe','Suspicious','Offline'],
+      datasets: [{
+        data: [ds.safe, ds.suspicious, ds.offline],
+        backgroundColor: [PALETTE.green, PALETTE.red, PALETTE.gray],
+        borderColor: '#0f172a', borderWidth: 3,
+      }]
+    },
+    options: {
+      plugins: { legend: { position: 'right', labels: { color: '#94a3b8', padding: 16 } } }
+    }
+  });
+
+  /* Chart 4 – Alert types bar chart */
+  const types = d.alert_types;
+  new Chart(document.getElementById('alertTypeChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: types.map(t => t.type),
+      datasets: [{
+        label: 'Count',
+        data: types.map(t => t.count),
+        backgroundColor: [PALETTE.red, PALETTE.yellow, PALETTE.blue, PALETTE.purple, PALETTE.cyan],
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(148,163,184,0.08)' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+
+  /* Chart 5 – Log level bar */
+  const ll = d.log_levels;
+  new Chart(document.getElementById('logLevelChart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: ['INFO','WARNING','DANGER'],
+      datasets: [{
+        label: 'Log Entries',
+        data: [ll.INFO, ll.WARNING, ll.DANGER],
+        backgroundColor: [PALETTE.blue, PALETTE.yellow, PALETTE.red],
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(148,163,184,0.08)' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+loadReports();
+</script>
+{% endblock %}

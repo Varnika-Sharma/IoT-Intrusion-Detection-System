@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block topbar_title %}Dashboard{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- ── Stat Cards ─────────────────────────────────────────────────────────── -->
+<section class="cards-grid" id="stat-cards">
+  <div class="stat-card" data-key="total_devices">
+    <div class="card-icon icon-blue">◉</div>
+    <div class="card-body">
+      <div class="card-value" id="stat-total">—</div>
+      <div class="card-label">Total IoT Devices</div>
+    </div>
+    <div class="card-trend">Registered</div>
+  </div>
+  <div class="stat-card" data-key="active_devices">
+    <div class="card-icon icon-green">◈</div>
+    <div class="card-body">
+      <div class="card-value" id="stat-active">—</div>
+      <div class="card-label">Active Devices</div>
+    </div>
+    <div class="card-trend">Online now</div>
+  </div>
+  <div class="stat-card" data-key="open_alerts">
+    <div class="card-icon icon-red">⚠</div>
+    <div class="card-body">
+      <div class="card-value" id="stat-alerts">—</div>
+      <div class="card-label">Open Alerts</div>
+    </div>
+    <div class="card-trend">Needs attention</div>
+  </div>
+  <div class="stat-card" data-key="system_status">
+    <div class="card-icon icon-yellow">⬡</div>
+    <div class="card-body">
+      <div class="card-value system-status-val" id="stat-status">—</div>
+      <div class="card-label">System Status</div>
+    </div>
+    <div class="card-trend">IDS Engine</div>
+  </div>
+</section>
+
+<!-- ── Main Row ──────────────────────────────────────────────────────────── -->
+<section class="dashboard-row">
+
+  <!-- Recent Alerts -->
+  <div class="panel panel-wide">
+    <div class="panel-header">
+      <span class="panel-title">⚠ Recent Alerts</span>
+      <a href="/alerts" class="panel-action">View all →</a>
+    </div>
+    <div class="panel-body" id="recent-alerts-list">
+      <div class="loading-row">Loading alerts…</div>
+    </div>
+  </div>
+
+  <!-- Device Status Summary -->
+  <div class="panel panel-narrow">
+    <div class="panel-header">
+      <span class="panel-title">◉ Device Health</span>
+    </div>
+    <div class="panel-body">
+      <canvas id="deviceHealthChart" height="200"></canvas>
+      <div class="legend-list" id="device-legend"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Bottom Row ────────────────────────────────────────────────────────── -->
+<section class="dashboard-row">
+
+  <!-- Live Log Feed -->
+  <div class="panel panel-wide">
+    <div class="panel-header">
+      <span class="panel-title">≡ Live Log Feed</span>
+      <span class="live-badge">● LIVE</span>
+    </div>
+    <div class="panel-body log-feed" id="live-log-feed">
+      <div class="loading-row">Connecting to log stream…</div>
+    </div>
+  </div>
+
+  <!-- Detection Actions -->
+  <div class="panel panel-narrow">
+    <div class="panel-header">
+      <span class="panel-title">⬡ IDS Engine</span>
+    </div>
+    <div class="panel-body detection-panel">
+      <div class="detection-rules">
+        <div class="rule-item"><span class="rule-dot active"></span> Unknown Device Detection</div>
+        <div class="rule-item"><span class="rule-dot active"></span> Brute-Force Login Detection</div>
+        <div class="rule-item"><span class="rule-dot active"></span> Traffic Spike Detection</div>
+        <div class="rule-item"><span class="rule-dot active"></span> Suspicious IP Detection</div>
+      </div>
+      <button class="btn-scan" id="scan-btn" onclick="runScan()">
+        ▶ Run Detection Scan
+      </button>
+      <div class="scan-result" id="scan-result"></div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ── Dashboard init ─────────────────────────────────────────────────────── */
+let deviceChart = null;
+
+async function loadDashboard() {
+  const stats = await apiFetch('/api/stats');
+  if (!stats) return;
+
+  setInnerText('stat-total',  stats.total_devices);
+  setInnerText('stat-active', stats.active_devices);
+  setInnerText('stat-alerts', stats.open_alerts);
+
+  const statusEl = document.getElementById('stat-status');
+  statusEl.textContent = stats.system_status;
+  statusEl.className = 'card-value system-status-val status-' + stats.system_status.toLowerCase();
+
+  updateAlertBadge(stats.open_alerts);
+  updateSystemPill(stats.system_status);
+
+  await loadRecentAlerts();
+  await loadDeviceChart(stats);
+  await loadLiveLogs();
+}
+
+async function loadRecentAlerts() {
+  const alerts = await apiFetch('/api/alerts?status=open');
+  const el = document.getElementById('recent-alerts-list');
+  if (!alerts || alerts.length === 0) {
+    el.innerHTML = '<div class="empty-state">✓ No open alerts</div>';
+    return;
+  }
+  el.innerHTML = alerts.slice(0, 6).map(a => `
+    <div class="alert-row sev-${a.severity}">
+      <div class="alert-row-left">
+        <span class="sev-badge sev-${a.severity}">${a.severity.toUpperCase()}</span>
+        <div>
+          <div class="alert-row-type">${escHtml(a.alert_type)}</div>
+          <div class="alert-row-meta">${escHtml(a.device_name || '')} · ${escHtml(a.ip_address)}</div>
+        </div>
+      </div>
+      <span class="alert-row-time">${formatTime(a.timestamp)}</span>
+    </div>
+  `).join('');
+}
+
+async function loadDeviceChart(stats) {
+  const safe       = stats.total_devices - stats.suspicious_devices - 1; // approx
+  const suspicious = stats.suspicious_devices;
+  const offline    = 1;
+
+  if (deviceChart) deviceChart.destroy();
+  const ctx = document.getElementById('deviceHealthChart').getContext('2d');
+  deviceChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Safe', 'Suspicious', 'Offline'],
+      datasets: [{
+        data: [safe, suspicious, offline],
+        backgroundColor: ['#22c55e', '#ef4444', '#6b7280'],
+        borderColor: '#0f172a',
+        borderWidth: 3,
+        hoverOffset: 8,
+      }]
+    },
+    options: {
+      cutout: '70%',
+      plugins: { legend: { display: false } },
+    }
+  });
+
+  document.getElementById('device-legend').innerHTML = [
+    { label: 'Safe',       color: '#22c55e', count: safe },
+    { label: 'Suspicious', color: '#ef4444', count: suspicious },
+    { label: 'Offline',    color: '#6b7280', count: offline },
+  ].map(d => `
+    <div class="legend-row">
+      <span class="legend-dot" style="background:${d.color}"></span>
+      <span class="legend-label">${d.label}</span>
+      <span class="legend-count">${d.count}</span>
+    </div>
+  `).join('');
+}
+
+async function loadLiveLogs() {
+  const logs = await apiFetch('/api/logs');
+  const el = document.getElementById('live-log-feed');
+  if (!logs || logs.length === 0) { el.innerHTML = '<div class="empty-state">No logs</div>'; return; }
+  renderLogFeed(el, logs.slice(0, 10));
+}
+
+function renderLogFeed(el, logs) {
+  el.innerHTML = logs.map(l => `
+    <div class="log-line level-${l.log_level.toLowerCase()}">
+      <span class="log-ts">${l.timestamp.substring(11, 19)}</span>
+      <span class="log-level-tag">${l.log_level}</span>
+      <span class="log-event">${escHtml(l.event_type)}</span>
+      <span class="log-detail">${escHtml(l.details)}</span>
+    </div>
+  `).join('');
+}
+
+async function runScan() {
+  const btn = document.getElementById('scan-btn');
+  const res = document.getElementById('scan-result');
+  btn.disabled = true;
+  btn.textContent = '⟳ Scanning…';
+  res.textContent = '';
+
+  const data = await apiFetch('/api/detect', 'POST');
+  btn.disabled = false;
+  btn.textContent = '▶ Run Detection Scan';
+
+  if (data) {
+    res.className = data.new_alerts > 0 ? 'scan-result danger' : 'scan-result success';
+    res.textContent = data.message;
+    showToast(data.message, data.new_alerts > 0 ? 'danger' : 'success');
+    loadDashboard();
+  }
+}
+
+// Refresh live log every 8 seconds (simulated live feed)
+setInterval(async () => {
+  await apiFetch('/api/simulate', 'POST');
+  await loadLiveLogs();
+}, 8000);
+
+loadDashboard();
+</script>
+{% endblock %}
